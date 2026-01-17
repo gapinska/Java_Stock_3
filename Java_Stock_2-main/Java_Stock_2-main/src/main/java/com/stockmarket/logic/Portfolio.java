@@ -51,10 +51,6 @@ public class Portfolio {
         return cash + calculateAssetsRealValue();
     }
 
-    /**
-     * Backward-compatible overload used by older tests / UI.
-     * Uses today's date and current asset market price as the lot unit price.
-     */
     public void buyAsset(Asset asset, double quantity) {
         buyAsset(asset, quantity, LocalDate.now(), asset.getMarketPrice());
     }

@@ -27,13 +27,11 @@ public class ReportGenerator {
                 Asset a1 = p1.getAsset();
                 Asset a2 = p2.getAsset();
 
-                // 1) typ
                 AssetType t1 = a1.getType();
                 AssetType t2 = a2.getType();
                 int byType = t1.compareTo(t2);
                 if (byType != 0) return byType;
 
-                // 2) wartość rynkowa malejąco
                 double v1 = p1.getMarketValue();
                 double v2 = p2.getMarketValue();
                 return Double.compare(v2, v1);

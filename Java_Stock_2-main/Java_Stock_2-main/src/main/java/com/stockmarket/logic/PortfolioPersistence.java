@@ -19,25 +19,24 @@ public class PortfolioPersistence {
         if (file == null) throw new IllegalArgumentException("File cannot be null");
 
         try (BufferedWriter bw = Files.newBufferedWriter(file)) {
-            bw.write("HEADER|CASH|" + portfolio.getCash());
+            bw.write(LineType.HEADER.name() + "|" + HeaderField.CASH.name() + "|" + portfolio.getCash());
             bw.newLine();
 
             for (Map.Entry<String, Position> entry : portfolio.getPositions().entrySet()) {
                 Position pos = entry.getValue();
                 Asset a = pos.getAsset();
 
-                // ASSET|TYPE|SYMBOL|DECLARED_QTY|NAME|MARKET_PRICE
                 double declaredQty = 0.0;
                 Deque<PurchaseLot> lots = pos.getLots();
                 for (PurchaseLot lot : lots) {
                     declaredQty += lot.getQuantity();
                 }
 
-                bw.write("ASSET|" + a.getType() + "|" + a.getSymbol() + "|" + declaredQty + "|" + a.getName() + "|" + a.getMarketPrice());
+                bw.write(LineType.ASSET.name() + "|" + a.getType() + "|" + a.getSymbol() + "|" + declaredQty + "|" + a.getName() + "|" + a.getMarketPrice());
                 bw.newLine();
 
                 for (PurchaseLot lot : lots) {
-                    bw.write("LOT|" + lot.getPurchaseDate() + "|" + lot.getQuantity() + "|" + lot.getUnitPrice());
+                    bw.write(LineType.LOT.name() + "|" + lot.getPurchaseDate() + "|" + lot.getQuantity() + "|" + lot.getUnitPrice());
                     bw.newLine();
                 }
             }
@@ -56,7 +55,9 @@ public class PortfolioPersistence {
             if (line == null) throw new DataIntegrityException("Empty file");
 
             String[] header = split(line, 3);
-            if (!"HEADER".equals(header[0]) || !"CASH".equals(header[1])) {
+            LineType headerType = parseEnum(LineType.class, header[0], "header type");
+            HeaderField headerField = parseEnum(HeaderField.class, header[1], "header field");
+            if (headerType != LineType.HEADER || headerField != HeaderField.CASH) {
                 throw new DataIntegrityException("Invalid header line: " + line);
             }
 
@@ -73,52 +74,52 @@ public class PortfolioPersistence {
 
                 String[] parts = split(line, -1);
 
-                if ("ASSET".equals(parts[0])) {
-                    // Walidacja poprzedniego aktywa (jeśli było w formacie z deklarowaną ilością)
-                    if (currentAsset != null && expectedQty != null) {
-                        if (Double.compare(lotsQtySum, expectedQty) != 0) {
-                            throw new DataIntegrityException(
-                                    "Lots quantity sum mismatch for " + currentSymbol + ": expected=" + expectedQty + ", actual=" + lotsQtySum
-                            );
+                LineType type = parseEnum(LineType.class, parts[0], "line type");
+                switch (type) {
+                    case ASSET -> {
+                        if (currentAsset != null && expectedQty != null) {
+                            if (Double.compare(lotsQtySum, expectedQty) != 0) {
+                                throw new DataIntegrityException(
+                                        "Lots quantity sum mismatch for " + currentSymbol + ": expected=" + expectedQty + ", actual=" + lotsQtySum
+                                );
+                            }
+                        }
+
+                        expectedQty = null;
+                        if (parts.length == 6) {
+                            expectedQty = parseDouble(parts[3], "declared quantity");
+                        } else if (parts.length != 5) {
+                            throw new DataIntegrityException("Invalid ASSET line length");
+                        }
+
+                        currentAsset = parseAsset(parts);
+                        currentSymbol = currentAsset.getSymbol();
+                        lotsQtySum = 0.0;
+
+                        if (portfolio.getPosition(currentSymbol) == null) {
+                            portfolio.getPositions().put(currentSymbol, new Position(currentAsset));
                         }
                     }
+                    case LOT -> {
+                        if (currentAsset == null) throw new DataIntegrityException("LOT without ASSET: " + line);
+                        if (parts.length != 4) throw new DataIntegrityException("Invalid LOT line length: " + line);
 
-                    expectedQty = null;
-                    if (parts.length == 6) {
-                        expectedQty = parseDouble(parts[3], "declared quantity");
-                    } else if (parts.length != 5) {
-                        throw new DataIntegrityException("Invalid ASSET line length");
+                        LocalDate date = parseDate(parts[1], "lot date");
+                        double qty = parseDouble(parts[2], "lot quantity");
+                        double unitPrice = parseDouble(parts[3], "lot unit price");
+
+                        if (qty <= 0) throw new DataIntegrityException("Invalid lot quantity: " + qty);
+
+                        Position pos = portfolio.getPosition(currentSymbol);
+                        if (pos == null) throw new DataIntegrityException("Missing position for symbol: " + currentSymbol);
+
+                        pos.addLot(new PurchaseLot(date, unitPrice, qty));
+                        lotsQtySum += qty;
                     }
-
-                    currentAsset = parseAsset(parts);
-                    currentSymbol = currentAsset.getSymbol();
-                    lotsQtySum = 0.0;
-
-                    // upewnij się, że pozycja istnieje
-                    if (portfolio.getPosition(currentSymbol) == null) {
-                        portfolio.getPositions().put(currentSymbol, new Position(currentAsset));
-                    }
-                } else if ("LOT".equals(parts[0])) {
-                    if (currentAsset == null) throw new DataIntegrityException("LOT without ASSET: " + line);
-                    if (parts.length != 4) throw new DataIntegrityException("Invalid LOT line length: " + line);
-
-                    LocalDate date = parseDate(parts[1], "lot date");
-                    double qty = parseDouble(parts[2], "lot quantity");
-                    double unitPrice = parseDouble(parts[3], "lot unit price");
-
-                    if (qty <= 0) throw new DataIntegrityException("Invalid lot quantity: " + qty);
-
-                    Position pos = portfolio.getPosition(currentSymbol);
-                    if (pos == null) throw new DataIntegrityException("Missing position for symbol: " + currentSymbol);
-
-                    pos.addLot(new PurchaseLot(date, unitPrice, qty));
-                    lotsQtySum += qty;
-                } else {
-                    throw new DataIntegrityException("Unknown line type: " + line);
+                    case HEADER -> throw new DataIntegrityException("Unexpected HEADER line: " + line);
                 }
             }
 
-            // Walidacja ostatniego aktywa
             if (currentAsset != null && expectedQty != null) {
                 if (Double.compare(lotsQtySum, expectedQty) != 0) {
                     throw new DataIntegrityException(
@@ -134,9 +135,15 @@ public class PortfolioPersistence {
         }
     }
 
+    private <E extends Enum<E>> E parseEnum(Class<E> type, String token, String field) {
+        try {
+            return Enum.valueOf(type, token);
+        } catch (IllegalArgumentException ex) {
+            throw new DataIntegrityException("Invalid " + field + ": " + token);
+        }
+    }
+
     private Asset parseAsset(String[] parts) {
-        // ASSET|TYPE|SYMBOL|NAME|MARKET_PRICE (legacy)
-        // ASSET|TYPE|SYMBOL|DECLARED_QTY|NAME|MARKET_PRICE (v2)
         if (parts.length != 5 && parts.length != 6) {
             throw new DataIntegrityException("Invalid ASSET line length");
         }
@@ -159,14 +166,11 @@ public class PortfolioPersistence {
             marketPrice = parseDouble(parts[5], "market price");
         }
 
-        // Wymagane: różne klasy aktywów polimorficznie
         return switch (type) {
             case SHARE -> new Share(symbol, name, marketPrice);
             case COMMODITY ->
-                    // dla uproszczenia: storageCostRatePerUnit = 0 przy odczycie
                     new Commodity(symbol, name, marketPrice, 0.0);
             case CURRENCY ->
-                    // dla uproszczenia: spread = 0 przy odczycie
                     new Currency(symbol, name, marketPrice, 0.0);
         };
     }
